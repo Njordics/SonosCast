@@ -1,0 +1,101 @@
+name: Build
+
+# Builds everything on every push and pull request.
+# Pushing a tag like v1.1.0 also publishes all downloads to a GitHub release for that tag.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  windows-app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Version
+        id: v
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Publish
+        shell: bash
+        run: |
+          V=${{ startsWith(github.ref, 'refs/tags/v') && steps.v.outputs.version || '0.0.0-dev' }}
+          dotnet publish src/SonosCast/SonosCast.csproj -c Release -r win-x64 --self-contained false \
+            -p:PublishSingleFile=true -p:DebugType=None -p:Version=$V -o out/fd
+          dotnet publish src/SonosCast/SonosCast.csproj -c Release -r win-x64 --self-contained true \
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=None -p:Version=$V -o out/sc
+          mkdir dist
+          cp out/fd/SonosCast.exe "dist/SonosCast-$V-win-x64.exe"
+          cp out/sc/SonosCast.exe "dist/SonosCast-$V-win-x64-standalone.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-app
+          path: dist/*
+
+  cli:
+    strategy:
+      matrix:
+        include:
+          - { rid: linux-x64,   os: ubuntu-latest }
+          - { rid: linux-arm64, os: ubuntu-latest }
+          - { rid: osx-arm64,   os: macos-latest }   # built on macOS so the binary gets its ad-hoc signature
+          - { rid: osx-x64,     os: macos-latest }
+          - { rid: win-x64,     os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Publish
+        shell: bash
+        run: |
+          V=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
+          V=${V#v}
+          dotnet publish src/SonosCast.Cli/SonosCast.Cli.csproj -c Release -r ${{ matrix.rid }} --self-contained true \
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=None \
+            -p:Version=${V/dev/0.0.0-dev} -o out
+          mkdir dist
+          NAME="sonoscast-cli-$V-${{ matrix.rid }}"
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
+            (cd out && 7z a "../dist/$NAME.zip" sonoscast.exe)
+          else
+            chmod +x out/sonoscast
+            tar -C out -czf "dist/$NAME.tar.gz" sonoscast   # tar keeps the executable bit
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.rid }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows-app, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "SonosCast ${GITHUB_REF_NAME#v}" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber

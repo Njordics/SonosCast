@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Platform-neutral pieces shared by the Windows app and the cross-platform CLI:
+       Sonos discovery/control and the WAV stream server. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SonosCast</RootNamespace>
+  </PropertyGroup>
+
+</Project>

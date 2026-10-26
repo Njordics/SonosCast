@@ -272,6 +272,8 @@ sealed class GlyphButton : Canvas
     bool _hover;
     public string Glyph { get; set; } = "";
     public float Spin { get; set; }
+    /// <summary>Let the background show through (used over the banner art).</summary>
+    public bool Translucent { get; set; }
 
     public GlyphButton() { Cursor = Cursors.Hand; BackColor = Theme.Card; }
 
@@ -282,11 +284,12 @@ sealed class GlyphButton : Canvas
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
+        // Paint whatever is behind us (a card, or the banner art) so the rounded corners blend in.
+        ButtonRenderer.DrawParentBackground(g, ClientRectangle, this);
         Theme.Hq(g);
-        g.Clear(Parent?.BackColor ?? Theme.Card);
         var r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
         using var path = Theme.Rounded(r, 10 * S);
-        using (var fill = new SolidBrush(_hover && Enabled ? Theme.CardHover : Color.FromArgb(18, 15, 32))) g.FillPath(fill, path);
+        using (var fill = new SolidBrush(_hover && Enabled ? Theme.CardHover : Color.FromArgb(Translucent ? 150 : 255, 18, 15, 32))) g.FillPath(fill, path);
         using (var pen = new Pen(_hover && Enabled ? Theme.Violet : Theme.Border, 1f)) g.DrawPath(pen, path);
 
         var state = g.Save();

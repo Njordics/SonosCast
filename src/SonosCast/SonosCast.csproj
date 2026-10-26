@@ -15,14 +15,13 @@
 
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <ProjectReference Include="..\SonosCast.Core\SonosCast.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\banner.jpg" />
     <EmbeddedResource Include="Assets\icon.png" />
     <EmbeddedResource Include="Assets\app.ico" />
-    <Compile Remove="art\**" />
-    <None Remove="art\**" />
   </ItemGroup>
 
 </Project>

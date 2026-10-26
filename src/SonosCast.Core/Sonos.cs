@@ -17,7 +17,8 @@ public sealed record SonosDevice(string Ip, string RoomName, string ModelName, s
 /// <summary>Finds Sonos speakers and drives them through their local UPnP API on port 1400.</summary>
 public static class Sonos
 {
-    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(4) };
+    // Timeouts are per call (see SoapAsync): Play can legitimately take a while.
+    static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     // ---------- discovery ----------
 
@@ -102,7 +103,9 @@ public static class Sonos
     {
         try
         {
-            var xml = await Http.GetStringAsync($"http://{ip}:1400/xml/device_description.xml", ct);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(4));
+            var xml = await Http.GetStringAsync($"http://{ip}:1400/xml/device_description.xml", timeout.Token);
             string Get(string tag) => Regex.Match(xml, $"<{tag}>(.*?)</{tag}>").Groups[1].Value;
             var uuid = Get("UDN").Replace("uuid:", "");
             if (!uuid.StartsWith("RINCON_")) return null;
@@ -116,8 +119,9 @@ public static class Sonos
     const string AvTransport = "urn:schemas-upnp-org:service:AVTransport:1";
     const string Rendering = "urn:schemas-upnp-org:service:RenderingControl:1";
 
-    static async Task<string> SoapAsync(string ip, string path, string service, string action, string args)
+    static async Task<string> SoapAsync(string ip, string path, string service, string action, string args, int timeoutSeconds = 4)
     {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
         var body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
                    "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
                    $"<s:Body><u:{action} xmlns:u=\"{service}\">{args}</u:{action}></s:Body></s:Envelope>";
@@ -126,7 +130,10 @@ public static class Sonos
             Content = new StringContent(body, Encoding.UTF8, "text/xml")
         };
         req.Headers.Add("SOAPACTION", $"\"{service}#{action}\"");
-        using var resp = await Http.SendAsync(req);
+        HttpResponseMessage resp;
+        try { resp = await Http.SendAsync(req, cts.Token); }
+        catch (OperationCanceledException) { throw new TimeoutException($"The speaker at {ip} didn't answer {action} within {timeoutSeconds} s."); }
+        using var _ = resp;
         var text = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode)
         {
@@ -170,7 +177,8 @@ public static class Sonos
                    $"<res protocolInfo=\"http-get:*:audio/wav:*\">{SecurityElement.Escape(streamUrl)}</res></item></DIDL-Lite>";
         await SoapAsync(ip, "/MediaRenderer/AVTransport/Control", AvTransport, "SetAVTransportURI",
             $"<InstanceID>0</InstanceID><CurrentURI>{SecurityElement.Escape(streamUrl)}</CurrentURI><CurrentURIMetaData>{SecurityElement.Escape(didl)}</CurrentURIMetaData>");
-        await SoapAsync(ip, "/MediaRenderer/AVTransport/Control", AvTransport, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>");
+        // The speaker doesn't answer Play until it has (or has given up on) connecting to the stream.
+        await SoapAsync(ip, "/MediaRenderer/AVTransport/Control", AvTransport, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>", timeoutSeconds: 20);
     }
 
     public static async Task StopAsync(string ip)

@@ -5,10 +5,11 @@ namespace SonosCast;
 public sealed class MainForm : Form
 {
     const int StreamPort = 8930;
-    static readonly string SettingsFile = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SonosCast", "last-speaker.txt");
+    public const string ShowEventName = "SonosCast.ShowWindow";
 
+    readonly Settings _settings = Settings.Load();
     readonly Header _header = new();
+    readonly GlyphButton _gear = new() { Glyph = "", Translucent = true };
     readonly Card _deviceCard = new() { Caption = "Speaker" };
     readonly Picker _speakers = new() { Glyph = "", Placeholder = "Searching for Sonos speakers…" };
     readonly GlyphButton _refresh = new() { Glyph = "" };
@@ -32,10 +33,12 @@ public sealed class MainForm : Form
     string? _playingOn;
     int _stalledTicks;
     long _lastBytes;
-    bool _searching;
+    bool _searching, _startHidden, _startedUp;
+    readonly EventWaitHandle _showSignal = new(false, EventResetMode.AutoReset, ShowEventName);
 
-    public MainForm()
+    public MainForm(bool startInTray = false)
     {
+        _startHidden = startInTray;
         Text = "SonosCast";
         Icon = Theme.LoadIcon();
         _tray.Icon = Icon;
@@ -49,6 +52,7 @@ public sealed class MainForm : Form
         _deviceCard.Controls.AddRange([_speakers, _refresh, _outputCaption, _outputs]);
         _volumeCard.Controls.AddRange([_volGlyph, _volume, _volValue]);
         _logCard.Controls.Add(_log);
+        _header.Controls.Add(_gear);
         Controls.AddRange([_logCard, _volumeCard, _meter, _status, _toggle, _deviceCard, _header]);
 
         float s = DeviceDpi / 96f;
@@ -82,7 +86,15 @@ public sealed class MainForm : Form
 
         LoadOutputs();
         _log.TabStop = false;
-        Shown += async (_, _) => { ActiveControl = _toggle; await FindSpeakersAsync(); };
+        Shown += async (_, _) => { ActiveControl = _toggle; await StartupAsync(); };
+        _gear.Click += (_, _) => ShowSettingsMenu();
+
+        // Another launch of SonosCast (e.g. from the Start menu while we sit in the tray) asks us to show up.
+        new Thread(() =>
+        {
+            while (_showSignal.WaitOne())
+                if (IsHandleCreated) BeginInvoke(RestoreFromTray);
+        }) { IsBackground = true }.Start();
         SetStatus("Idle", Theme.Muted, "Pick a speaker and press play");
     }
 
@@ -100,6 +112,7 @@ public sealed class MainForm : Form
         int cardW = W - pad * 2;
 
         _header.SetBounds(0, 0, W, (int)(150 * s));
+        _gear.SetBounds(W - pad - (int)(36 * s), (int)(14 * s), (int)(36 * s), (int)(36 * s));
 
         // Speaker + capture pickers
         int y = (int)(140 * s);
@@ -134,6 +147,62 @@ public sealed class MainForm : Form
     }
 
     void RestoreFromTray() { Show(); WindowState = FormWindowState.Normal; Activate(); }
+
+    protected override void SetVisibleCore(bool value)
+    {
+        // Launched with --tray (start with Windows): stay in the tray, but still find speakers and auto-play.
+        if (_startHidden)
+        {
+            _startHidden = false;
+            CreateHandle();
+            BeginInvoke(async () => await StartupAsync());
+            value = false;
+        }
+        base.SetVisibleCore(value);
+    }
+
+    async Task StartupAsync()
+    {
+        if (_startedUp) return;
+        _startedUp = true;
+        await FindSpeakersAsync();
+
+        if (!_settings.AutoPlay) return;
+        // Right after boot the network may not be up yet, so keep looking for a couple of minutes.
+        for (int attempt = 0; Selected == null && attempt < 12; attempt++)
+        {
+            await Task.Delay(10_000);
+            await FindSpeakersAsync();
+        }
+        if (Selected != null && _streamer == null) await StartAsync();
+    }
+
+    void ShowSettingsMenu()
+    {
+        var menu = new ContextMenuStrip { Renderer = new DarkMenuRenderer(), ShowImageMargin = false, Font = Theme.Body };
+        var startup = new ToolStripMenuItem("Start with Windows") { Checked = Settings.StartWithWindows };
+        startup.Click += (_, _) =>
+        {
+            try
+            {
+                Settings.StartWithWindows = !startup.Checked;
+                Log(Settings.StartWithWindows ? "SonosCast will start with Windows (in the tray)." : "SonosCast won't start with Windows.");
+            }
+            catch (Exception ex) { Log("Couldn't change startup setting: " + ex.Message); }
+        };
+        var autoplay = new ToolStripMenuItem("Start playing when SonosCast opens") { Checked = _settings.AutoPlay };
+        autoplay.Click += (_, _) =>
+        {
+            _settings.AutoPlay = !_settings.AutoPlay;
+            _settings.Save();
+            Log(_settings.AutoPlay ? "Will start playing automatically on the last speaker." : "Auto-play turned off.");
+        };
+        var github = new ToolStripMenuItem("SonosCast on GitHub");
+        github.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/Njordics/SonosCast") { UseShellExecute = true });
+        menu.Items.AddRange([startup, autoplay, new ToolStripSeparator(), github]);
+        foreach (ToolStripItem i in menu.Items) { i.ForeColor = Theme.Text; i.Padding = new Padding(4, 6, 4, 6); }
+        menu.Show(_gear, new Point(_gear.Width - menu.PreferredSize.Width, _gear.Height + 4));
+    }
 
     void SetStatus(string text, Color dot, string detail)
     {
@@ -178,8 +247,7 @@ public sealed class MainForm : Form
             Log(found.Count == 0 ? "No Sonos speakers found. Is this PC on the same network?" : $"Found {found.Count} speaker(s).");
 
             // Prefer the speaker used last time, otherwise a Play:1, otherwise the first one.
-            var last = File.Exists(SettingsFile) ? File.ReadAllText(SettingsFile).Trim() : "";
-            var pick = found.FindIndex(d => d.Uuid == last);
+            var pick = found.FindIndex(d => d.Uuid == _settings.LastSpeakerUuid);
             if (pick < 0) pick = found.FindIndex(d => d.ModelName.Contains("Play:1", StringComparison.OrdinalIgnoreCase));
             if (pick < 0 && found.Count > 0) pick = 0;
             if (pick >= 0) _speakers.SelectedIndex = pick;
@@ -202,8 +270,8 @@ public sealed class MainForm : Form
         if (dev == null) return;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
-            File.WriteAllText(SettingsFile, dev.Uuid);
+            _settings.LastSpeakerUuid = dev.Uuid;
+            _settings.Save();
             _volume.Value = await Sonos.GetVolumeAsync(dev.Ip);
             _volValue.Text = _volume.Value.ToString();
         }
@@ -248,9 +316,16 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            Log("Could not start: " + ex.Message);
-            SetStatus("Couldn't start", Color.IndianRed, ex.Message);
+            // The speaker never fetched the stream before giving up on Play: almost always the firewall.
+            bool blocked = ex is TimeoutException && _streamer is { EverConnected: false };
+            var reason = ex is System.Net.Sockets.SocketException { SocketErrorCode: System.Net.Sockets.SocketError.AddressAlreadyInUse }
+                ? $"Port {StreamPort} is in use. Is another copy of SonosCast (or an older version) still running?"
+                : ex.Message;
+            Log("Could not start: " + reason);
+            SetStatus("Couldn't start", Color.IndianRed, reason);
             _streamer?.Dispose(); _streamer = null;
+            _toggle.Busy = false;
+            if (blocked) await OfferFirewallFixAsync();
         }
         finally { _toggle.Busy = false; }
     }
@@ -281,7 +356,8 @@ public sealed class MainForm : Form
 
         var room = Selected?.RoomName ?? "Sonos";
         if (state == "PLAYING" && _streamer.ClientCount > 0)
-            SetStatus($"Live on {room}", Theme.Live, $"{_streamer.SampleRate / 1000.0:0.#} kHz · 16-bit stereo · {kbps:N0} kbps");
+            SetStatus($"Live on {room}", Theme.Live,
+                $"{_streamer.SampleRate / 1000.0:0.#} kHz · 16-bit stereo · {kbps:N0} kbps · PC buffer {_streamer.TakePeakBacklogMs()} ms");
         else if (state == "TRANSITIONING" || !_streamer.EverConnected)
             SetStatus("Connecting…", Theme.Amber, $"Waiting for {room} to pick up the stream");
         else
