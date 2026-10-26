@@ -69,7 +69,7 @@ Press the button again to stop. Closing the app also stops the speaker.
 
 ## Good to know
 
-- **There is a delay of about 1–2 seconds.** Sonos speakers hold that much audio before playing it, and an app can't change that. This is fine for music, podcasts and background audio, but video and games will feel out of sync.
+- **Any delay depends on your network.** On a good home network it's usually not noticeable. A weak Wi-Fi signal to the PC or the speaker can add some lag, and a wired connection gives the best results.
 - **Your PC keeps playing sound locally.** SonosCast copies the audio rather than redirecting it. To hear it only on the Sonos, mute your PC speakers or headphones. Alternatively, install a virtual audio device such as [VB-CABLE](https://vb-audio.com/Cable/), set it as your Windows output, and choose it under **Capture from**.
 - If you change what the speaker is playing in the Sonos app, SonosCast stops streaming. Press stop and then play to bring it back.
 
