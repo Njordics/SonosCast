@@ -1,0 +1,8 @@
+﻿bin/
+obj/
+publish/
+publish-new/
+*.user
+.vs/
+# ComfyUI candidate renders; the chosen art lives in Assets/
+art/*.png
