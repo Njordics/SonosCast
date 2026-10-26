@@ -28,10 +28,21 @@ It was built and tested on a **Sonos Play:1**. It should work with other Sonos s
 ## Requirements
 
 - Windows 10 or 11
-- [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0) (if you run the prebuilt `.exe`)
+- [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0), unless you use the standalone download
 - A Sonos speaker on the **same network** as your PC
 
 ## Getting started
+
+### Download
+
+Grab the latest version from the **[Releases page](https://github.com/Njordics/SonosCast/releases/latest)**:
+
+| File | Use it if… |
+| --- | --- |
+| `SonosCast-<version>-win-x64-standalone.exe` (~50 MB) | You want it to just work. Nothing else needs to be installed. |
+| `SonosCast-<version>-win-x64.exe` (~2 MB) | You already have the [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0). |
+
+SonosCast doesn't need installing. Put the `.exe` wherever you like and run it. It isn't code-signed, so Windows SmartScreen may warn you the first time. Click **More info**, then **Run anyway**.
 
 ### Build it yourself
 
